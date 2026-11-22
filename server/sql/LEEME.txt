@@ -1,0 +1,2 @@
+Coloca aquí el script de la base de datos (PanaderiaDB.sql) que ya tiene tu equipo
+y ejecútalo en SQL Server antes de iniciar el servidor.
