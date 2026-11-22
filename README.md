@@ -14,13 +14,13 @@ Backend Express + SQL Server y frontend React (Vite).
    cd server
    npm install
    # edita .env con tus datos de conexión
-   npm run dev
+   npm.cmd run dev
    ```
 3. Cliente (otra terminal):
    ```bash
    cd client
    npm install
-   npm run dev
+   npm.cmd run dev
    ```
 
 ## Pantallas
