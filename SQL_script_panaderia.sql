@@ -1,0 +1,633 @@
+USE master;
+GO
+
+IF DB_ID('PanaderiaDB') IS NOT NULL
+BEGIN
+    ALTER DATABASE PanaderiaDB SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+    DROP DATABASE PanaderiaDB;
+END
+GO
+
+CREATE DATABASE PanaderiaDB;
+GO
+
+USE PanaderiaDB;
+GO
+
+/* ==========================================================================
+   1. CATÁLOGOS COMPARTIDOS
+   ========================================================================== */
+
+CREATE TABLE Rol (
+    RolId       INT IDENTITY(1,1) CONSTRAINT PK_Rol PRIMARY KEY,
+    Nombre      NVARCHAR(30) NOT NULL CONSTRAINT UQ_Rol_Nombre UNIQUE      -- Dueño, Encargado, Empleado
+);
+
+CREATE TABLE Sucursal (
+    SucursalId    INT IDENTITY(1,1) CONSTRAINT PK_Sucursal PRIMARY KEY,
+    Nombre        NVARCHAR(60)  NOT NULL CONSTRAINT UQ_Sucursal_Nombre UNIQUE,
+    Direccion     NVARCHAR(150) NULL,
+    Telefono      VARCHAR(15)   NULL,
+    Activa        BIT           NOT NULL CONSTRAINT DF_Sucursal_Activa DEFAULT 1,
+    FechaRegistro DATETIME2(0)  NOT NULL CONSTRAINT DF_Sucursal_Fecha DEFAULT SYSDATETIME()
+);
+
+CREATE TABLE Puesto (
+    PuestoId    INT IDENTITY(1,1) CONSTRAINT PK_Puesto PRIMARY KEY,
+    Nombre      NVARCHAR(60)  NOT NULL CONSTRAINT UQ_Puesto_Nombre UNIQUE,
+    Descripcion NVARCHAR(200) NULL
+);
+
+CREATE TABLE Turno (
+    TurnoId           INT IDENTITY(1,1) CONSTRAINT PK_Turno PRIMARY KEY,
+    Nombre            NVARCHAR(30) NOT NULL CONSTRAINT UQ_Turno_Nombre UNIQUE,
+    HoraEntrada       TIME(0)      NOT NULL,
+    HoraSalida        TIME(0)      NOT NULL,
+    ToleranciaMinutos INT          NOT NULL CONSTRAINT DF_Turno_Tol DEFAULT 10
+);
+
+/* ==========================================================================
+   2. EMPLEADOS  [EQUIPO 4]
+   ========================================================================== */
+
+CREATE TABLE Empleado (
+    EmpleadoId      INT IDENTITY(1001,1) CONSTRAINT PK_Empleado PRIMARY KEY,
+    Nombre          NVARCHAR(60) NOT NULL,
+    ApellidoPaterno NVARCHAR(60) NOT NULL,
+    ApellidoMaterno NVARCHAR(60) NULL,
+    RFC             CHAR(13)     NOT NULL CONSTRAINT UQ_Empleado_RFC UNIQUE,
+    CURP            CHAR(18)     NULL,
+    NSS             CHAR(11)     NULL,                 -- Número de Seguridad Social (IMSS)
+    FechaNacimiento DATE         NULL,
+    FechaIngreso    DATE         NOT NULL,             -- base para antigüedad, vacaciones y finiquito
+    SucursalId      INT          NOT NULL,
+    PuestoId        INT          NOT NULL,
+    TurnoId         INT          NOT NULL,
+    SalarioPorHora  DECIMAL(10,2) NOT NULL,
+    Clabe           CHAR(18)     NULL,                 -- cuenta para depósito de nómina
+    Telefono        VARCHAR(15)  NULL,
+    Email           VARCHAR(100) NULL,
+    Estatus         VARCHAR(10)  NOT NULL CONSTRAINT DF_Empleado_Estatus DEFAULT 'Activo',
+    FechaRegistro   DATETIME2(0) NOT NULL CONSTRAINT DF_Empleado_Fecha DEFAULT SYSDATETIME(),
+    CONSTRAINT CK_Empleado_Id4Digitos CHECK (EmpleadoId BETWEEN 1000 AND 9999),
+    CONSTRAINT CK_Empleado_RFC        CHECK (LEN(RFC) = 13),
+    CONSTRAINT CK_Empleado_Salario    CHECK (SalarioPorHora > 0),
+    CONSTRAINT CK_Empleado_Estatus    CHECK (Estatus IN ('Activo','Inactivo')),
+    CONSTRAINT FK_Empleado_Sucursal FOREIGN KEY (SucursalId) REFERENCES Sucursal(SucursalId),
+    CONSTRAINT FK_Empleado_Puesto   FOREIGN KEY (PuestoId)   REFERENCES Puesto(PuestoId),
+    CONSTRAINT FK_Empleado_Turno    FOREIGN KEY (TurnoId)    REFERENCES Turno(TurnoId)
+);
+CREATE INDEX IX_Empleado_Sucursal ON Empleado(SucursalId, Estatus);
+
+/* Usuarios del sistema (login). Los empleados de piso NO necesitan usuario:
+   marcan asistencia en la tableta con su EmpleadoId de 4 dígitos. */
+CREATE TABLE Usuario (
+    UsuarioId     INT IDENTITY(1,1) CONSTRAINT PK_Usuario PRIMARY KEY,
+    NombreUsuario VARCHAR(50)    NOT NULL CONSTRAINT UQ_Usuario_Nombre UNIQUE,
+    PasswordHash  VARBINARY(64)  NOT NULL,
+    RolId         INT            NOT NULL,
+    EmpleadoId    INT            NULL,      -- encargados son empleados; el dueño no
+    SucursalId    INT            NULL,      -- sucursal que administra el encargado
+    Activo        BIT            NOT NULL CONSTRAINT DF_Usuario_Activo DEFAULT 1,
+    UltimoAcceso  DATETIME2(0)   NULL,
+    CONSTRAINT FK_Usuario_Rol      FOREIGN KEY (RolId)      REFERENCES Rol(RolId),
+    CONSTRAINT FK_Usuario_Empleado FOREIGN KEY (EmpleadoId) REFERENCES Empleado(EmpleadoId),
+    CONSTRAINT FK_Usuario_Sucursal FOREIGN KEY (SucursalId) REFERENCES Sucursal(SucursalId)
+);
+
+CREATE TABLE CreditoInfonavit (
+    CreditoInfonavitId INT IDENTITY(1,1) CONSTRAINT PK_CreditoInfonavit PRIMARY KEY,
+    EmpleadoId         INT            NOT NULL,
+    NumeroCredito      VARCHAR(20)    NOT NULL CONSTRAINT UQ_Credito_Numero UNIQUE,
+    TipoDescuento      VARCHAR(10)    NOT NULL,  -- VSM | PORCENTAJE | CUOTA_FIJA
+    ValorDescuento     DECIMAL(12,4)  NOT NULL,  -- factor VSM, % del SBC o pesos mensuales
+    FechaInicio        DATE           NOT NULL,
+    FechaFin           DATE           NULL,
+    Activo             BIT            NOT NULL CONSTRAINT DF_Credito_Activo DEFAULT 1,
+    CONSTRAINT CK_Credito_Tipo CHECK (TipoDescuento IN ('VSM','PORCENTAJE','CUOTA_FIJA')),
+    CONSTRAINT FK_Credito_Empleado FOREIGN KEY (EmpleadoId) REFERENCES Empleado(EmpleadoId)
+);
+
+CREATE TABLE VacacionesTomadas (
+    VacacionId   INT IDENTITY(1,1) CONSTRAINT PK_VacacionesTomadas PRIMARY KEY,
+    EmpleadoId   INT  NOT NULL,
+    FechaInicio  DATE NOT NULL,
+    FechaFin     DATE NOT NULL,
+    Dias         INT  NOT NULL,
+    AutorizadaPor INT NULL,
+    CONSTRAINT CK_Vacaciones_Fechas CHECK (FechaFin >= FechaInicio),
+    CONSTRAINT FK_Vacaciones_Empleado FOREIGN KEY (EmpleadoId)    REFERENCES Empleado(EmpleadoId),
+    CONSTRAINT FK_Vacaciones_Usuario  FOREIGN KEY (AutorizadaPor) REFERENCES Usuario(UsuarioId)
+);
+
+/* ==========================================================================
+   3. ASISTENCIA  [EQUIPO 1]
+   ========================================================================== */
+
+CREATE TABLE Tableta (
+    TabletaId     INT IDENTITY(1,1) CONSTRAINT PK_Tableta PRIMARY KEY,
+    SucursalId    INT          NOT NULL,
+    Nombre        NVARCHAR(60) NOT NULL,
+    Identificador VARCHAR(50)  NOT NULL CONSTRAINT UQ_Tableta_Ident UNIQUE,
+    Activa        BIT          NOT NULL CONSTRAINT DF_Tableta_Activa DEFAULT 1,
+    CONSTRAINT FK_Tableta_Sucursal FOREIGN KEY (SucursalId) REFERENCES Sucursal(SucursalId)
+);
+
+CREATE TABLE Asistencia (
+    AsistenciaId    INT IDENTITY(1,1) CONSTRAINT PK_Asistencia PRIMARY KEY,
+    EmpleadoId      INT           NOT NULL,
+    SucursalId      INT           NOT NULL,      -- sucursal donde marcó
+    TabletaId       INT           NULL,
+    Fecha           DATE          NOT NULL,
+    HoraEntrada     DATETIME2(0)  NOT NULL,      -- hora del SERVIDOR
+    HoraSalida      DATETIME2(0)  NULL,          -- NULL = turno abierto
+    HorasTrabajadas AS (CASE WHEN HoraSalida IS NULL THEN NULL
+                             ELSE CAST(DATEDIFF(MINUTE, HoraEntrada, HoraSalida) / 60.0 AS DECIMAL(5,2)) END) PERSISTED,
+    FotoEntradaRuta NVARCHAR(260) NULL,
+    FotoSalidaRuta  NVARCHAR(260) NULL,
+    EsApoyoTemporal BIT           NOT NULL CONSTRAINT DF_Asistencia_Apoyo DEFAULT 0,
+    CONSTRAINT UQ_Asistencia_EmpleadoFecha UNIQUE (EmpleadoId, Fecha),
+    CONSTRAINT CK_Asistencia_Horas CHECK (HoraSalida IS NULL OR HoraSalida > HoraEntrada),
+    CONSTRAINT FK_Asistencia_Empleado FOREIGN KEY (EmpleadoId) REFERENCES Empleado(EmpleadoId),
+    CONSTRAINT FK_Asistencia_Sucursal FOREIGN KEY (SucursalId) REFERENCES Sucursal(SucursalId),
+    CONSTRAINT FK_Asistencia_Tableta  FOREIGN KEY (TabletaId)  REFERENCES Tableta(TabletaId)
+);
+CREATE INDEX IX_Asistencia_SucursalFecha ON Asistencia(SucursalId, Fecha);
+
+/* ==========================================================================
+   4. PERIODOS DE NÓMINA  [EQUIPO 2]  (se crean aquí porque Equipo 3 los usa)
+   ========================================================================== */
+
+CREATE TABLE PeriodoNomina (
+    PeriodoNominaId INT IDENTITY(1,1) CONSTRAINT PK_PeriodoNomina PRIMARY KEY,
+    FechaInicio     DATE        NOT NULL,
+    FechaFin        DATE        NOT NULL,
+    FechaPago       DATE        NOT NULL,
+    Periodicidad    VARCHAR(10) NOT NULL CONSTRAINT DF_Periodo_Period DEFAULT 'SEMANAL',
+    Estatus         VARCHAR(15) NOT NULL CONSTRAINT DF_Periodo_Estatus DEFAULT 'Abierto',
+    CONSTRAINT UQ_Periodo UNIQUE (FechaInicio, Periodicidad),
+    CONSTRAINT CK_Periodo_Fechas  CHECK (FechaFin >= FechaInicio),
+    CONSTRAINT CK_Periodo_Estatus CHECK (Estatus IN ('Abierto','En validación','Cerrado','Pagado'))
+);
+
+/* ==========================================================================
+   5. INCIDENCIAS Y VALIDACIÓN  [EQUIPO 3]
+   ========================================================================== */
+
+CREATE TABLE TipoIncidencia (
+    TipoIncidenciaId INT IDENTITY(1,1) CONSTRAINT PK_TipoIncidencia PRIMARY KEY,
+    Nombre           NVARCHAR(50) NOT NULL CONSTRAINT UQ_TipoIncidencia UNIQUE,
+    ConGoce          BIT NOT NULL,      -- 1 = se paga
+    AfectaNomina     BIT NOT NULL
+);
+
+CREATE TABLE Incidencia (
+    IncidenciaId     INT IDENTITY(1,1) CONSTRAINT PK_Incidencia PRIMARY KEY,
+    EmpleadoId       INT           NOT NULL,
+    PeriodoNominaId  INT           NOT NULL,
+    Fecha            DATE          NOT NULL,
+    TipoIncidenciaId INT           NOT NULL,
+    Horas            DECIMAL(5,2)  NULL,        -- para horas extra
+    Comentario       NVARCHAR(300) NULL,
+    JustificanteRuta NVARCHAR(260) NULL,        -- nota médica, etc.
+    RegistradaPor    INT           NULL,
+    FechaRegistro    DATETIME2(0)  NOT NULL CONSTRAINT DF_Incidencia_Fecha DEFAULT SYSDATETIME(),
+    CONSTRAINT FK_Incidencia_Empleado FOREIGN KEY (EmpleadoId)       REFERENCES Empleado(EmpleadoId),
+    CONSTRAINT FK_Incidencia_Periodo  FOREIGN KEY (PeriodoNominaId)  REFERENCES PeriodoNomina(PeriodoNominaId),
+    CONSTRAINT FK_Incidencia_Tipo     FOREIGN KEY (TipoIncidenciaId) REFERENCES TipoIncidencia(TipoIncidenciaId),
+    CONSTRAINT FK_Incidencia_Usuario  FOREIGN KEY (RegistradaPor)    REFERENCES Usuario(UsuarioId)
+);
+CREATE INDEX IX_Incidencia_EmpleadoPeriodo ON Incidencia(EmpleadoId, PeriodoNominaId);
+
+/* Resumen semanal por empleado que aprueba el encargado.
+   Es la ENTRADA del módulo de nómina (Equipo 2). */
+CREATE TABLE ValidacionSemanal (
+    ValidacionSemanalId       INT IDENTITY(1,1) CONSTRAINT PK_ValidacionSemanal PRIMARY KEY,
+    EmpleadoId                INT           NOT NULL,
+    PeriodoNominaId           INT           NOT NULL,
+    SucursalId                INT           NOT NULL,
+    HorasNormales             DECIMAL(6,2)  NOT NULL CONSTRAINT DF_Val_HN DEFAULT 0,
+    HorasExtra                DECIMAL(6,2)  NOT NULL CONSTRAINT DF_Val_HE DEFAULT 0,   -- autorizadas
+    DiasTrabajados            INT           NOT NULL CONSTRAINT DF_Val_DT DEFAULT 0,
+    Faltas                    INT           NOT NULL CONSTRAINT DF_Val_F  DEFAULT 0,
+    FaltasJustificadasConGoce INT           NOT NULL CONSTRAINT DF_Val_FJ DEFAULT 0,
+    Retardos                  INT           NOT NULL CONSTRAINT DF_Val_R  DEFAULT 0,
+    Estatus                   VARCHAR(25)   NOT NULL CONSTRAINT DF_Val_Estatus DEFAULT 'Pendiente',
+    ValidadoPor               INT           NULL,
+    FechaValidacion           DATETIME2(0)  NULL,
+    Comentario                NVARCHAR(300) NULL,
+    CONSTRAINT UQ_Validacion UNIQUE (EmpleadoId, PeriodoNominaId),
+    CONSTRAINT CK_Validacion_Estatus CHECK (Estatus IN ('Pendiente','Validado por Sucursal','Rechazado')),
+    CONSTRAINT FK_Validacion_Empleado FOREIGN KEY (EmpleadoId)      REFERENCES Empleado(EmpleadoId),
+    CONSTRAINT FK_Validacion_Periodo  FOREIGN KEY (PeriodoNominaId) REFERENCES PeriodoNomina(PeriodoNominaId),
+    CONSTRAINT FK_Validacion_Sucursal FOREIGN KEY (SucursalId)      REFERENCES Sucursal(SucursalId),
+    CONSTRAINT FK_Validacion_Usuario  FOREIGN KEY (ValidadoPor)     REFERENCES Usuario(UsuarioId)
+);
+
+/* ==========================================================================
+   6. CATÁLOGOS FISCALES  [EQUIPO 2]
+   ========================================================================== */
+
+CREATE TABLE ParametroFiscal (
+    ParametroFiscalId         INT IDENTITY(1,1) CONSTRAINT PK_ParametroFiscal PRIMARY KEY,
+    FechaInicioVigencia       DATE          NOT NULL,
+    FechaFinVigencia          DATE          NULL,
+    UMADiaria                 DECIMAL(10,2) NOT NULL,
+    SalarioMinimoDiario       DECIMAL(10,2) NOT NULL,
+    DiasAguinaldo             INT           NOT NULL CONSTRAINT DF_PF_Aguinaldo DEFAULT 15,
+    PorcentajePrimaVacacional DECIMAL(5,2)  NOT NULL CONSTRAINT DF_PF_Prima DEFAULT 25.00,  -- en %
+    TopeSBC_UMAs              INT           NOT NULL CONSTRAINT DF_PF_Tope DEFAULT 25,
+    ExcedenteEyM_UMAs         INT           NOT NULL CONSTRAINT DF_PF_Exc DEFAULT 3
+);
+
+CREATE TABLE TablaISR (
+    TablaISRId          INT IDENTITY(1,1) CONSTRAINT PK_TablaISR PRIMARY KEY,
+    Anio                SMALLINT      NOT NULL,
+    Periodicidad        VARCHAR(10)   NOT NULL,   -- SEMANAL, QUINCENAL, MENSUAL...
+    LimiteInferior      DECIMAL(12,2) NOT NULL,
+    LimiteSuperior      DECIMAL(12,2) NULL,       -- NULL = "en adelante"
+    CuotaFija           DECIMAL(12,2) NOT NULL,
+    PorcentajeExcedente DECIMAL(5,2)  NOT NULL    -- en %
+);
+CREATE INDEX IX_TablaISR ON TablaISR(Anio, Periodicidad, LimiteInferior);
+
+CREATE TABLE CuotaIMSS (
+    CuotaIMSSId      INT IDENTITY(1,1) CONSTRAINT PK_CuotaIMSS PRIMARY KEY,
+    Anio             SMALLINT     NOT NULL,
+    Ramo             NVARCHAR(60) NOT NULL,
+    Concepto         NVARCHAR(80) NOT NULL,
+    PorcentajeObrero DECIMAL(6,4) NOT NULL,      -- en %  (0.4000 = 0.40 %)
+    BaseCalculo      VARCHAR(20)  NOT NULL,      -- SBC | EXCEDENTE_3UMA
+    CONSTRAINT CK_CuotaIMSS_Base CHECK (BaseCalculo IN ('SBC','EXCEDENTE_3UMA'))
+);
+
+CREATE TABLE TablaVacaciones (
+    TablaVacacionesId INT IDENTITY(1,1) CONSTRAINT PK_TablaVacaciones PRIMARY KEY,
+    AniosDesde        INT NOT NULL,
+    AniosHasta        INT NOT NULL,
+    DiasVacaciones    INT NOT NULL
+);
+
+CREATE TABLE ConceptoNomina (
+    ConceptoNominaId INT IDENTITY(1,1) CONSTRAINT PK_ConceptoNomina PRIMARY KEY,
+    Clave            VARCHAR(10)  NOT NULL CONSTRAINT UQ_Concepto_Clave UNIQUE,
+    Nombre           NVARCHAR(60) NOT NULL,
+    Tipo             VARCHAR(11)  NOT NULL,      -- PERCEPCION | DEDUCCION
+    ClaveSAT         CHAR(3)      NULL,          -- catálogo del CFDI de nómina
+    CONSTRAINT CK_Concepto_Tipo CHECK (Tipo IN ('PERCEPCION','DEDUCCION'))
+);
+
+/* ==========================================================================
+   7. NÓMINA  [EQUIPO 2]
+   ========================================================================== */
+
+CREATE TABLE Nomina (
+    NominaId            INT IDENTITY(1,1) CONSTRAINT PK_Nomina PRIMARY KEY,
+    PeriodoNominaId     INT           NOT NULL,
+    EmpleadoId          INT           NOT NULL,
+    SucursalId          INT           NOT NULL,   -- copia al momento del cálculo (reportes por sucursal)
+    ValidacionSemanalId INT           NULL,
+    SalarioPorHora      DECIMAL(10,2) NOT NULL,
+    SalarioDiario       DECIMAL(10,2) NOT NULL,
+    SDI                 DECIMAL(10,2) NOT NULL,   -- Salario Diario Integrado
+    HorasNormales       DECIMAL(6,2)  NOT NULL CONSTRAINT DF_Nom_HN  DEFAULT 0,
+    HorasExtraDobles    DECIMAL(6,2)  NOT NULL CONSTRAINT DF_Nom_HED DEFAULT 0,
+    HorasExtraTriples   DECIMAL(6,2)  NOT NULL CONSTRAINT DF_Nom_HET DEFAULT 0,
+    TotalPercepciones   DECIMAL(12,2) NOT NULL CONSTRAINT DF_Nom_TP  DEFAULT 0,
+    TotalDeducciones    DECIMAL(12,2) NOT NULL CONSTRAINT DF_Nom_TD  DEFAULT 0,
+    NetoPagar           AS (TotalPercepciones - TotalDeducciones) PERSISTED,
+    Estatus             VARCHAR(12)   NOT NULL CONSTRAINT DF_Nom_Estatus DEFAULT 'Calculada',
+    FechaCalculo        DATETIME2(0)  NOT NULL CONSTRAINT DF_Nom_Fecha DEFAULT SYSDATETIME(),
+    UUIDTimbrado        VARCHAR(36)   NULL,       -- para integración futura con el PAC
+    CONSTRAINT UQ_Nomina UNIQUE (PeriodoNominaId, EmpleadoId),
+    CONSTRAINT CK_Nomina_Estatus CHECK (Estatus IN ('Calculada','Autorizada','Pagada','Cancelada')),
+    CONSTRAINT FK_Nomina_Periodo    FOREIGN KEY (PeriodoNominaId)     REFERENCES PeriodoNomina(PeriodoNominaId),
+    CONSTRAINT FK_Nomina_Empleado   FOREIGN KEY (EmpleadoId)          REFERENCES Empleado(EmpleadoId),
+    CONSTRAINT FK_Nomina_Sucursal   FOREIGN KEY (SucursalId)          REFERENCES Sucursal(SucursalId),
+    CONSTRAINT FK_Nomina_Validacion FOREIGN KEY (ValidacionSemanalId) REFERENCES ValidacionSemanal(ValidacionSemanalId)
+);
+CREATE INDEX IX_Nomina_SucursalPeriodo ON Nomina(SucursalId, PeriodoNominaId);
+
+CREATE TABLE NominaDetalle (
+    NominaDetalleId  INT IDENTITY(1,1) CONSTRAINT PK_NominaDetalle PRIMARY KEY,
+    NominaId         INT           NOT NULL,
+    ConceptoNominaId INT           NOT NULL,
+    Importe          DECIMAL(12,2) NOT NULL,
+    ImporteGravado   DECIMAL(12,2) NOT NULL CONSTRAINT DF_ND_Grav DEFAULT 0,
+    ImporteExento    DECIMAL(12,2) NOT NULL CONSTRAINT DF_ND_Exen DEFAULT 0,
+    CONSTRAINT FK_NominaDetalle_Nomina   FOREIGN KEY (NominaId)         REFERENCES Nomina(NominaId) ON DELETE CASCADE,
+    CONSTRAINT FK_NominaDetalle_Concepto FOREIGN KEY (ConceptoNominaId) REFERENCES ConceptoNomina(ConceptoNominaId)
+);
+
+/* ==========================================================================
+   8. BAJAS Y FINIQUITOS  [EQUIPO 4]
+   ========================================================================== */
+
+CREATE TABLE MotivoBaja (
+    MotivoBajaId        INT IDENTITY(1,1) CONSTRAINT PK_MotivoBaja PRIMARY KEY,
+    Nombre              NVARCHAR(60) NOT NULL CONSTRAINT UQ_MotivoBaja UNIQUE,
+    PagaIndemnizacion   BIT NOT NULL,   -- liquidación (despido injustificado)
+    PagaPrimaAntiguedad BIT NOT NULL
+);
+
+CREATE TABLE Baja (
+    BajaId        INT IDENTITY(1,1) CONSTRAINT PK_Baja PRIMARY KEY,
+    EmpleadoId    INT           NOT NULL CONSTRAINT UQ_Baja_Empleado UNIQUE,
+    MotivoBajaId  INT           NOT NULL,
+    FechaEfectiva DATE          NOT NULL,
+    Comentario    NVARCHAR(300) NULL,
+    ProcesadaPor  INT           NULL,
+    FechaRegistro DATETIME2(0)  NOT NULL CONSTRAINT DF_Baja_Fecha DEFAULT SYSDATETIME(),
+    CONSTRAINT FK_Baja_Empleado FOREIGN KEY (EmpleadoId)   REFERENCES Empleado(EmpleadoId),
+    CONSTRAINT FK_Baja_Motivo   FOREIGN KEY (MotivoBajaId) REFERENCES MotivoBaja(MotivoBajaId),
+    CONSTRAINT FK_Baja_Usuario  FOREIGN KEY (ProcesadaPor) REFERENCES Usuario(UsuarioId)
+);
+
+CREATE TABLE Finiquito (
+    FiniquitoId               INT IDENTITY(1,1) CONSTRAINT PK_Finiquito PRIMARY KEY,
+    BajaId                    INT           NOT NULL CONSTRAINT UQ_Finiquito_Baja UNIQUE,
+    SalarioDiario             DECIMAL(10,2) NOT NULL,
+    DiasPendientesPago        DECIMAL(5,2)  NOT NULL CONSTRAINT DF_Fin_DP  DEFAULT 0,
+    ImporteDiasPendientes     DECIMAL(12,2) NOT NULL CONSTRAINT DF_Fin_IDP DEFAULT 0,
+    DiasVacacionesPendientes  DECIMAL(5,2)  NOT NULL CONSTRAINT DF_Fin_DV  DEFAULT 0,
+    ImporteVacaciones         DECIMAL(12,2) NOT NULL CONSTRAINT DF_Fin_IV  DEFAULT 0,
+    ImportePrimaVacacional    DECIMAL(12,2) NOT NULL CONSTRAINT DF_Fin_IPV DEFAULT 0,
+    DiasAguinaldoProporcional DECIMAL(6,2)  NOT NULL CONSTRAINT DF_Fin_DA  DEFAULT 0,
+    ImporteAguinaldo          DECIMAL(12,2) NOT NULL CONSTRAINT DF_Fin_IA  DEFAULT 0,
+    ImporteIndemnizacion      DECIMAL(12,2) NOT NULL CONSTRAINT DF_Fin_II  DEFAULT 0,
+    ImportePrimaAntiguedad    DECIMAL(12,2) NOT NULL CONSTRAINT DF_Fin_IPA DEFAULT 0,
+    ISRRetenido               DECIMAL(12,2) NOT NULL CONSTRAINT DF_Fin_ISR DEFAULT 0,
+    TotalNeto AS (ImporteDiasPendientes + ImporteVacaciones + ImportePrimaVacacional + ImporteAguinaldo
+                  + ImporteIndemnizacion + ImportePrimaAntiguedad - ISRRetenido) PERSISTED,
+    Estatus                   VARCHAR(12)   NOT NULL CONSTRAINT DF_Fin_Estatus DEFAULT 'Calculado',
+    FechaCalculo              DATETIME2(0)  NOT NULL CONSTRAINT DF_Fin_Fecha DEFAULT SYSDATETIME(),
+    CONSTRAINT CK_Finiquito_Estatus CHECK (Estatus IN ('Calculado','Pagado','Cancelado')),
+    CONSTRAINT FK_Finiquito_Baja FOREIGN KEY (BajaId) REFERENCES Baja(BajaId)
+);
+GO
+
+/* ==========================================================================
+   9. VISTAS DE APOYO (lectura para todos los equipos)
+   ========================================================================== */
+
+CREATE OR ALTER VIEW vw_EmpleadoDetalle AS
+SELECT e.EmpleadoId,
+       CONCAT(e.Nombre, ' ', e.ApellidoPaterno, ' ', e.ApellidoMaterno) AS NombreCompleto,
+       e.RFC, e.NSS, e.FechaIngreso, e.SalarioPorHora, e.Estatus,
+       s.SucursalId, s.Nombre AS Sucursal,
+       p.PuestoId,   p.Nombre AS Puesto,
+       t.TurnoId,    t.Nombre AS Turno, t.HoraEntrada, t.HoraSalida
+FROM Empleado e
+JOIN Sucursal s ON s.SucursalId = e.SucursalId
+JOIN Puesto   p ON p.PuestoId   = e.PuestoId
+JOIN Turno    t ON t.TurnoId    = e.TurnoId;
+GO
+
+CREATE OR ALTER VIEW vw_AsistenciaDiaria AS
+SELECT a.AsistenciaId, a.Fecha,
+       e.EmpleadoId,
+       CONCAT(e.Nombre, ' ', e.ApellidoPaterno) AS Empleado,
+       a.SucursalId, s.Nombre AS SucursalMarcaje,
+       e.SucursalId AS SucursalAsignadaId,
+       a.HoraEntrada, a.HoraSalida, a.HorasTrabajadas, a.EsApoyoTemporal,
+       CASE WHEN DATEDIFF(MINUTE, CAST(a.Fecha AS DATETIME2(0)), a.HoraEntrada)
+                 > DATEDIFF(MINUTE, CAST('00:00' AS TIME(0)), t.HoraEntrada) + t.ToleranciaMinutos
+            THEN 'Retardo' ELSE 'A tiempo' END AS EstatusLlegada
+FROM Asistencia a
+JOIN Empleado e ON e.EmpleadoId = a.EmpleadoId
+JOIN Turno    t ON t.TurnoId    = e.TurnoId
+JOIN Sucursal s ON s.SucursalId = a.SucursalId;
+GO
+
+CREATE OR ALTER VIEW vw_NominaPorSucursal AS
+SELECT s.SucursalId, s.Nombre AS Sucursal,
+       p.PeriodoNominaId, p.FechaInicio, p.FechaFin,
+       COUNT(n.NominaId)        AS Empleados,
+       SUM(n.TotalPercepciones) AS TotalPercepciones,
+       SUM(n.TotalDeducciones)  AS TotalDeducciones,
+       SUM(n.NetoPagar)         AS TotalNeto
+FROM Nomina n
+JOIN Sucursal      s ON s.SucursalId      = n.SucursalId
+JOIN PeriodoNomina p ON p.PeriodoNominaId = n.PeriodoNominaId
+WHERE n.Estatus <> 'Cancelada'
+GROUP BY s.SucursalId, s.Nombre, p.PeriodoNominaId, p.FechaInicio, p.FechaFin;
+GO
+
+/* ==========================================================================
+   10. DATOS INICIALES Y DE PRUEBA
+   ========================================================================== */
+
+-- Catálogos generales ------------------------------------------------------
+INSERT INTO Rol (Nombre) VALUES (N'Dueño'), (N'Encargado'), (N'Empleado');
+
+INSERT INTO Sucursal (Nombre, Direccion, Telefono) VALUES
+ (N'Sucursal Centro', N'Calle Hidalgo 245, Zona Centro', '8441000001'),
+ (N'Sucursal Norte',  N'Blvd. Norte 1180, Col. Lomas',   '8441000002'),
+ (N'Sucursal Sur',    N'Av. del Sur 530, Col. Jardines', '8441000003');
+
+INSERT INTO Puesto (Nombre, Descripcion) VALUES
+ (N'Encargado de sucursal', N'Supervisa personal e incidencias de la sucursal'),
+ (N'Panadero',              N'Elaboración de pan'),
+ (N'Cajero',                N'Atención en mostrador y cobro'),
+ (N'Ayudante de panadería', N'Apoyo en producción y limpieza'),
+ (N'Repartidor',            N'Entregas a domicilio y a otras sucursales');
+
+INSERT INTO Turno (Nombre, HoraEntrada, HoraSalida, ToleranciaMinutos) VALUES
+ (N'Matutino',   '06:00', '14:00', 10),
+ (N'Vespertino', '14:00', '22:00', 10);
+
+-- Empleados (IDs 1001 a 1015) ---------------------------------------------
+INSERT INTO Empleado (Nombre, ApellidoPaterno, ApellidoMaterno, RFC, NSS, FechaNacimiento, FechaIngreso,
+                      SucursalId, PuestoId, TurnoId, SalarioPorHora) VALUES
+ (N'Laura',     N'Martínez',  N'Ríos',    'MARL850312K21', '43058512301', '1985-03-12', '2019-03-01', 1, 1, 1, 75.00),
+ (N'José',      N'Hernández', N'López',   'HELJ900705QW3', '43059012302', '1990-07-05', '2021-06-15', 1, 2, 1, 55.00),
+ (N'Miguel',    N'Torres',    N'Garza',   'TOGM950120HN4', '43059512303', '1995-01-20', '2023-01-09', 1, 2, 2, 55.00),
+ (N'Ana',       N'Sánchez',   N'Flores',  'SAFA000814LP2', '43050012304', '2000-08-14', '2024-08-01', 1, 3, 1, 45.00),
+ (N'Pedro',     N'Ramírez',   N'Cruz',    'RACP980302TS7', '43059812305', '1998-03-02', '2025-02-17', 1, 5, 2, 48.00),
+ (N'Rosa',      N'Castillo',  N'Vega',    'CAVR820917BC5', '43058212306', '1982-09-17', '2018-11-05', 2, 1, 1, 75.00),
+ (N'Luis',      N'Morales',   N'Ortiz',   'MOOL930411GH8', '43059312307', '1993-04-11', '2022-04-04', 2, 2, 1, 55.00),
+ (N'Carmen',    N'Jiménez',   N'Ruiz',    'JIRC960228MX1', '43059612308', '1996-02-28', '2024-10-21', 2, 2, 2, 55.00),
+ (N'Daniel',    N'Reyes',     N'Mendoza', 'REMD010610PZ9', '43050112309', '2001-06-10', '2025-07-01', 2, 3, 2, 45.00),
+ (N'Sofía',     N'Aguilar',   N'Navarro', 'AUNS030115RT6', '43050312310', '2003-01-15', '2026-03-02', 2, 4, 1, 42.00),
+ (N'Jorge',     N'Domínguez', N'Salas',   'DOSJ800525VB2', '43058012311', '1980-05-25', '2017-09-11', 3, 1, 1, 75.00),
+ (N'Patricia',  N'Vargas',    N'Luna',    'VALP911103KL4', '43059112312', '1991-11-03', '2020-05-18', 3, 2, 1, 55.00),
+ (N'Ricardo',   N'Medina',    N'Rojas',   'MERR970819DF3', '43059712313', '1997-08-19', '2023-11-13', 3, 2, 2, 55.00),
+ (N'Fernanda',  N'Herrera',   N'Soto',    'HESF990930NM7', '43059912314', '1999-09-30', '2025-05-05', 3, 3, 1, 45.00),
+ (N'Alejandro', N'Guzmán',    N'Peña',    'GUPA020707WX5', '43050212315', '2002-07-07', '2026-08-03', 3, 4, 2, 42.00);
+
+-- Usuarios (contraseña de prueba para todos: Panaderia2026!) --------------
+-- En la aplicación real el hash se genera en el backend (bcrypt/PBKDF2).
+INSERT INTO Usuario (NombreUsuario, PasswordHash, RolId, EmpleadoId, SucursalId) VALUES
+ ('dueno',            HASHBYTES('SHA2_256', N'Panaderia2026!'), 1, NULL, NULL),
+ ('encargado.centro', HASHBYTES('SHA2_256', N'Panaderia2026!'), 2, 1001, 1),
+ ('encargado.norte',  HASHBYTES('SHA2_256', N'Panaderia2026!'), 2, 1006, 2),
+ ('encargado.sur',    HASHBYTES('SHA2_256', N'Panaderia2026!'), 2, 1011, 3);
+
+INSERT INTO CreditoInfonavit (EmpleadoId, NumeroCredito, TipoDescuento, ValorDescuento, FechaInicio) VALUES
+ (1002, '0521123456', 'PORCENTAJE', 20.0000,   '2023-02-01'),
+ (1007, '0522987654', 'CUOTA_FIJA', 1200.0000, '2024-06-01'),
+ (1012, '0519555111', 'VSM',        18.5000,   '2021-09-01');
+
+INSERT INTO Tableta (SucursalId, Nombre, Identificador) VALUES
+ (1, N'Tableta mostrador Centro', 'TAB-CEN-01'),
+ (2, N'Tableta mostrador Norte',  'TAB-NOR-01'),
+ (3, N'Tableta mostrador Sur',    'TAB-SUR-01');
+
+-- Periodos semanales (lunes a domingo) ------------------------------------
+INSERT INTO PeriodoNomina (FechaInicio, FechaFin, FechaPago, Estatus) VALUES
+ ('2026-11-09', '2026-11-15', '2026-11-16', 'En validación'),
+ ('2026-11-16', '2026-11-22', '2026-11-23', 'Abierto'),
+ ('2026-11-23', '2026-11-29', '2026-11-30', 'Abierto');
+
+-- Catálogo de incidencias ------------------------------------------------
+INSERT INTO TipoIncidencia (Nombre, ConGoce, AfectaNomina) VALUES
+ (N'Retardo',                        1, 0),
+ (N'Falta',                          0, 1),
+ (N'Falta justificada con goce',     1, 1),
+ (N'Falta justificada sin goce',     0, 1),
+ (N'Horas extra',                    1, 1),
+ (N'Vacaciones',                     1, 1);
+
+-- Asistencias de prueba: semana 1 (lun-sáb) y semana 2 (lun-vie) ------------
+-- Genera llegadas entre 8 min antes y 16 min después (algunas con retardo),
+-- algunas jornadas con 1.5 h extra y algunas faltas.
+INSERT INTO Asistencia (EmpleadoId, SucursalId, TabletaId, Fecha, HoraEntrada, HoraSalida)
+SELECT e.EmpleadoId, e.SucursalId, tb.TabletaId, d.Fecha,
+       DATEADD(MINUTE, x.MinEntrada,                  CAST(d.Fecha AS DATETIME2(0))),
+       DATEADD(MINUTE, x.MinEntrada + 480 + x.Extra,  CAST(d.Fecha AS DATETIME2(0)))
+FROM Empleado e
+JOIN Turno   t  ON t.TurnoId     = e.TurnoId
+JOIN Tableta tb ON tb.SucursalId = e.SucursalId
+CROSS JOIN (VALUES (CAST('2026-11-09' AS DATE)), ('2026-11-10'), ('2026-11-11'), ('2026-11-12'),
+                   ('2026-11-13'), ('2026-11-14'),
+                   ('2026-11-16'), ('2026-11-17'), ('2026-11-18'), ('2026-11-19'), ('2026-11-20')) d(Fecha)
+CROSS APPLY (SELECT DATEDIFF(MINUTE, CAST('00:00' AS TIME(0)), t.HoraEntrada)
+                    + ((e.EmpleadoId * 7 + DAY(d.Fecha) * 3) % 25) - 8 AS MinEntrada,
+                    CASE WHEN (e.EmpleadoId + DAY(d.Fecha)) % 5 = 0 THEN 90 ELSE 0 END AS Extra) x
+WHERE (e.EmpleadoId + DAY(d.Fecha)) % 11 <> 0;
+
+-- Un apoyo temporal: Miguel (Centro) cubriendo en Sucursal Norte, turno abierto
+INSERT INTO Asistencia (EmpleadoId, SucursalId, TabletaId, Fecha, HoraEntrada, HoraSalida, EsApoyoTemporal)
+VALUES (1003, 2, 2, '2026-11-21', '2026-11-21T06:04:00', NULL, 1);
+
+-- Incidencias de la semana 1 ----------------------------------------------
+DECLARE @Retardo INT = (SELECT TipoIncidenciaId FROM TipoIncidencia WHERE Nombre = N'Retardo');
+DECLARE @Falta   INT = (SELECT TipoIncidenciaId FROM TipoIncidencia WHERE Nombre = N'Falta');
+DECLARE @FaltaCG INT = (SELECT TipoIncidenciaId FROM TipoIncidencia WHERE Nombre = N'Falta justificada con goce');
+DECLARE @Extra   INT = (SELECT TipoIncidenciaId FROM TipoIncidencia WHERE Nombre = N'Horas extra');
+
+-- Faltas: días laborables sin registro de asistencia
+INSERT INTO Incidencia (EmpleadoId, PeriodoNominaId, Fecha, TipoIncidenciaId, RegistradaPor)
+SELECT e.EmpleadoId, 1, d.Fecha, @Falta, u.UsuarioId
+FROM Empleado e
+JOIN Usuario u ON u.SucursalId = e.SucursalId AND u.RolId = 2
+CROSS JOIN (VALUES (CAST('2026-11-09' AS DATE)), ('2026-11-10'), ('2026-11-11'),
+                   ('2026-11-12'), ('2026-11-13'), ('2026-11-14')) d(Fecha)
+WHERE NOT EXISTS (SELECT 1 FROM Asistencia a WHERE a.EmpleadoId = e.EmpleadoId AND a.Fecha = d.Fecha);
+
+-- Una de esas faltas pasa a justificada con goce (nota médica)
+UPDATE TOP (1) Incidencia
+SET TipoIncidenciaId = @FaltaCG,
+    Comentario       = N'Presentó justificante médico',
+    JustificanteRuta = N'/justificantes/ejemplo.pdf'
+WHERE TipoIncidenciaId = @Falta AND PeriodoNominaId = 1;
+
+-- Retardos
+INSERT INTO Incidencia (EmpleadoId, PeriodoNominaId, Fecha, TipoIncidenciaId, RegistradaPor)
+SELECT a.EmpleadoId, 1, a.Fecha, @Retardo, u.UsuarioId
+FROM vw_AsistenciaDiaria a
+JOIN Usuario u ON u.SucursalId = a.SucursalAsignadaId AND u.RolId = 2
+WHERE a.Fecha BETWEEN '2026-11-09' AND '2026-11-15' AND a.EstatusLlegada = 'Retardo';
+
+-- Horas extra autorizadas (lo que pasa de 8 h por día)
+INSERT INTO Incidencia (EmpleadoId, PeriodoNominaId, Fecha, TipoIncidenciaId, Horas, Comentario, RegistradaPor)
+SELECT a.EmpleadoId, 1, a.Fecha, @Extra, a.HorasTrabajadas - 8, N'Autorizadas por encargado', u.UsuarioId
+FROM Asistencia a
+JOIN Empleado e ON e.EmpleadoId = a.EmpleadoId
+JOIN Usuario  u ON u.SucursalId = e.SucursalId AND u.RolId = 2
+WHERE a.Fecha BETWEEN '2026-11-09' AND '2026-11-15' AND a.HorasTrabajadas > 8;
+
+-- Validación semanal de la semana 1 (ya aprobada: lista para que Equipo 2 calcule)
+INSERT INTO ValidacionSemanal (EmpleadoId, PeriodoNominaId, SucursalId, HorasNormales, HorasExtra,
+                               DiasTrabajados, Faltas, FaltasJustificadasConGoce, Retardos,
+                               Estatus, ValidadoPor, FechaValidacion)
+SELECT e.EmpleadoId, 1, e.SucursalId,
+       ISNULL(SUM(CASE WHEN a.HorasTrabajadas > 8 THEN 8 ELSE a.HorasTrabajadas END), 0),
+       ISNULL(SUM(CASE WHEN a.HorasTrabajadas > 8 THEN a.HorasTrabajadas - 8 ELSE 0 END), 0),
+       COUNT(a.AsistenciaId),
+       (SELECT COUNT(*) FROM Incidencia i WHERE i.EmpleadoId = e.EmpleadoId AND i.PeriodoNominaId = 1 AND i.TipoIncidenciaId = @Falta),
+       (SELECT COUNT(*) FROM Incidencia i WHERE i.EmpleadoId = e.EmpleadoId AND i.PeriodoNominaId = 1 AND i.TipoIncidenciaId = @FaltaCG),
+       (SELECT COUNT(*) FROM Incidencia i WHERE i.EmpleadoId = e.EmpleadoId AND i.PeriodoNominaId = 1 AND i.TipoIncidenciaId = @Retardo),
+       'Validado por Sucursal', u.UsuarioId, '2026-11-15T20:00:00'
+FROM Empleado e
+JOIN Usuario u ON u.SucursalId = e.SucursalId AND u.RolId = 2
+LEFT JOIN Asistencia a ON a.EmpleadoId = e.EmpleadoId AND a.Fecha BETWEEN '2026-11-09' AND '2026-11-15'
+GROUP BY e.EmpleadoId, e.SucursalId, u.UsuarioId;
+
+-- Parámetros fiscales 2026 -------------------------------------------------
+-- UMA 2025 aplica en enero; UMA 2026 ($117.31) desde el 1 de febrero.
+-- Salario mínimo general 2026: $315.04 diarios.
+INSERT INTO ParametroFiscal (FechaInicioVigencia, FechaFinVigencia, UMADiaria, SalarioMinimoDiario) VALUES
+ ('2026-01-01', '2026-01-31', 113.14, 315.04),
+ ('2026-02-01', NULL,         117.31, 315.04);
+
+-- Tarifa ISR SEMANAL 2026 (Anexo 8 RMF 2026, DOF 28/12/2025) --------------
+INSERT INTO TablaISR (Anio, Periodicidad, LimiteInferior, LimiteSuperior, CuotaFija, PorcentajeExcedente) VALUES
+ (2026, 'SEMANAL',     0.01,    194.46,     0.00,  1.92),
+ (2026, 'SEMANAL',   194.47,   1650.67,     3.71,  6.40),
+ (2026, 'SEMANAL',  1650.68,   2900.87,    96.95, 10.88),
+ (2026, 'SEMANAL',  2900.88,   3372.11,   232.96, 16.00),
+ (2026, 'SEMANAL',  3372.12,   4037.32,   308.35, 17.92),
+ (2026, 'SEMANAL',  4037.33,   8142.75,   427.56, 21.36),
+ (2026, 'SEMANAL',  8142.76,  12834.08,  1304.45, 23.52),
+ (2026, 'SEMANAL', 12834.09,  24502.45,  2407.86, 30.00),
+ (2026, 'SEMANAL', 24502.46,  32669.91,  5908.35, 32.00),
+ (2026, 'SEMANAL', 32669.92,  98009.66,  8521.94, 34.00),
+ (2026, 'SEMANAL', 98009.67,      NULL, 30737.49, 35.00);
+
+-- Cuotas obreras IMSS (Ley del Seguro Social). Tope: 25 UMA ---------------
+INSERT INTO CuotaIMSS (Anio, Ramo, Concepto, PorcentajeObrero, BaseCalculo) VALUES
+ (2026, N'Enfermedades y Maternidad', N'Prestaciones en especie (excedente de 3 UMA)', 0.4000, 'EXCEDENTE_3UMA'),
+ (2026, N'Enfermedades y Maternidad', N'Prestaciones en dinero',                       0.2500, 'SBC'),
+ (2026, N'Enfermedades y Maternidad', N'Gastos médicos de pensionados',                0.3750, 'SBC'),
+ (2026, N'Invalidez y Vida',          N'Invalidez y Vida',                             0.6250, 'SBC'),
+ (2026, N'Retiro, Cesantía y Vejez',  N'Cesantía en edad avanzada y vejez',            1.1250, 'SBC');
+
+-- Días de vacaciones por antigüedad (LFT, reforma 2023) -------------------
+INSERT INTO TablaVacaciones (AniosDesde, AniosHasta, DiasVacaciones) VALUES
+ (1, 1, 12), (2, 2, 14), (3, 3, 16), (4, 4, 18), (5, 5, 20),
+ (6, 10, 22), (11, 15, 24), (16, 20, 26), (21, 25, 28), (26, 30, 30), (31, 35, 32);
+
+-- Conceptos de nómina (claves SAT del CFDI de nómina) ---------------------
+INSERT INTO ConceptoNomina (Clave, Nombre, Tipo, ClaveSAT) VALUES
+ ('P001', N'Sueldo base',            'PERCEPCION', '001'),
+ ('P002', N'Horas extra dobles',     'PERCEPCION', '019'),
+ ('P003', N'Horas extra triples',    'PERCEPCION', '019'),
+ ('P004', N'Aguinaldo',              'PERCEPCION', '002'),
+ ('P005', N'Prima vacacional',       'PERCEPCION', '021'),
+ ('P006', N'Prima de antigüedad',    'PERCEPCION', '022'),
+ ('P007', N'Indemnización',          'PERCEPCION', '025'),
+ ('D001', N'IMSS cuota obrera',      'DEDUCCION',  '001'),
+ ('D002', N'ISR retenido',           'DEDUCCION',  '002'),
+ ('D003', N'Crédito Infonavit',      'DEDUCCION',  '010');
+
+-- Motivos de baja ----------------------------------------------------------
+INSERT INTO MotivoBaja (Nombre, PagaIndemnizacion, PagaPrimaAntiguedad) VALUES
+ (N'Renuncia voluntaria',     0, 0),   -- prima de antigüedad solo con 15+ años
+ (N'Despido justificado',     0, 1),
+ (N'Despido injustificado',   1, 1),
+ (N'Término de contrato',     0, 0),
+ (N'Mutuo acuerdo',           0, 0);
+GO
+
+/* ==========================================================================
+   11. VERIFICACIÓN RÁPIDA
+   ========================================================================== */
+SELECT 'Empleado' AS Tabla, COUNT(*) AS Registros FROM Empleado
+UNION ALL SELECT 'Usuario',           COUNT(*) FROM Usuario
+UNION ALL SELECT 'Asistencia',        COUNT(*) FROM Asistencia
+UNION ALL SELECT 'Incidencia',        COUNT(*) FROM Incidencia
+UNION ALL SELECT 'ValidacionSemanal', COUNT(*) FROM ValidacionSemanal
+UNION ALL SELECT 'TablaISR',          COUNT(*) FROM TablaISR
+UNION ALL SELECT 'CuotaIMSS',         COUNT(*) FROM CuotaIMSS;
+GO
