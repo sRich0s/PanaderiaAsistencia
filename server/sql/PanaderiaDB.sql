@@ -983,7 +983,7 @@ BEGIN
     SET IDENTITY_INSERT [dbo].[Turno] ON
     INSERT [dbo].[Turno] ([TurnoId], [Nombre], [HoraEntrada], [HoraSalida], [ToleranciaMinutos]) VALUES
         (1, N'Matutino', '06:00:00', '14:00:00', 10),
-        (2, N'Vepertino', '14:00:00', '22:00:00', 10)
+        (2, N'Vespertino', '14:00:00', '22:00:00', 10)
     SET IDENTITY_INSERT [dbo].[Turno] OFF
 END
 GO
