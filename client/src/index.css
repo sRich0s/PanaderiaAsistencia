@@ -49,11 +49,125 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 3px s
 .aviso.error { background: #f9e1df; color: var(--rojo); }
 
 /* ---------- Login ---------- */
-.login { min-height: 100vh; display: grid; place-items: center; padding: 20px; }
-.login-card { background: var(--papel); border: 1px solid var(--linea); border-radius: 16px; padding: 32px; width: 100%; max-width: 380px; display: grid; gap: 16px; }
-.login-card h1 { font-size: 1.6rem; }
-.login-card label { display: grid; gap: 6px; font-weight: 600; font-size: .95rem; }
-.login-card input { padding: 10px 12px; border: 1px solid var(--linea); border-radius: 8px; font: inherit; }
+
+.login {
+  /* Misma paleta que la tableta (.tb) y el panel */
+  --tb-crema: #fff8ea;
+  --tb-trigo: #e9b949;
+  --tb-trigo-osc: #c8922a;
+  --tb-cafe: #4a2f1b;
+  --tb-cafe-suave: #7a5a42;
+  --tb-borde: #e6d6b8;
+  --tb-sombra-tecla: #e0cfae;
+  --tb-miel: #fff3d1;
+
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  color: var(--tb-cafe);
+}
+
+/* Fondo */
+body:has(.login) {
+  background:
+    radial-gradient(circle at 12% 18%, rgba(233, 185, 73, .28), transparent 42%),
+    radial-gradient(circle at 88% 85%, rgba(200, 146, 42, .22), transparent 40%),
+    #f6ead3;
+  background-attachment: fixed;
+  color: var(--tb-cafe);
+}
+
+/* Tarjeta */
+.login-card {
+  width: 100%;
+  max-width: 400px;
+  display: grid;
+  gap: 16px;
+  padding: 36px 34px 32px;
+  background: var(--tb-crema);
+  border: 2px solid var(--tb-borde);
+  border-top: 8px solid var(--tb-trigo);
+  border-radius: 28px;
+  box-shadow: 0 24px 60px rgba(74, 47, 27, .22), 0 2px 0 rgba(255, 255, 255, .6) inset;
+}
+
+/* Logo de pan */
+.login-card::before {
+  content: "🥖";
+  justify-self: center;
+  width: 72px; height: 72px;
+  display: grid; place-items: center;
+  font-size: 2.2rem;
+  border-radius: 50%;
+  background: linear-gradient(160deg, #6b4428 0%, #4a2f1b 100%);
+  border: 3px solid var(--tb-trigo);
+}
+
+.login-card h1 {
+  font-size: 1.8rem;
+  text-align: center;
+  color: var(--tb-cafe);
+}
+.login-card .sub {
+  margin: -6px 0 4px;
+  text-align: center;
+  color: var(--tb-cafe-suave);
+}
+
+/* Campos */
+.login-card label {
+  display: grid; gap: 6px;
+  font-weight: 700; font-size: .95rem;
+  color: var(--tb-cafe);
+}
+.login-card input {
+  padding: 12px 14px;
+  font: inherit; font-weight: 400; font-size: 1.05rem;
+  color: var(--tb-cafe);
+  background: #fff;
+  border: 2px solid var(--tb-borde);
+  border-radius: 14px;
+}
+.login-card input:focus-visible {
+  outline: none;
+  border-color: var(--tb-trigo-osc);
+  box-shadow: 0 0 0 4px rgba(233, 185, 73, .35);
+}
+
+/* Botón principal tipo "tecla" */
+.login-card .btn.primario {
+  margin-top: 4px;
+  padding: 14px 20px;
+  font-size: 1.1rem; font-weight: 700;
+  color: #fff;
+  background: var(--tb-cafe);
+  border-radius: 16px;
+  box-shadow: 0 5px 0 #2b1a0d;
+}
+.login-card .btn.primario:hover:not(:disabled) { background: #5a3a24; }
+.login-card .btn.primario:active:not(:disabled) {
+  transform: translateY(4px);
+  box-shadow: 0 1px 0 #2b1a0d;
+}
+.login-card .btn.primario:disabled { opacity: .4; box-shadow: 0 5px 0 #2b1a0d; }
+.login-card button:focus-visible { outline: 3px solid var(--tb-trigo-osc); outline-offset: 3px; }
+
+/* Mensaje de error */
+.login-card .error-txt {
+  margin: 0; padding: 12px 16px;
+  background: #f9e1df; border: 2px solid #efbcb7; color: var(--rojo);
+  border-radius: 16px; font-weight: 600;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .login-card .btn.primario { transition: transform .08s, box-shadow .08s, background .15s; }
+  .login-card input { transition: border-color .15s, box-shadow .15s; }
+}
+
+@media (max-width: 480px) {
+  .login-card { padding: 28px 20px 24px; border-radius: 22px; }
+}
 
 /* ---------- Panel ---------- */
 
