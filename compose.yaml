@@ -1,0 +1,60 @@
+services:
+  db:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: "Developer"
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:-Panaderia2026!Local}"
+    ports:
+      - "${DB_PUBLIC_PORT:-1433}:1433"
+    volumes:
+      - panaderia-sql-data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$${MSSQL_SA_PASSWORD}\" -C -Q \"SELECT 1\" >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  db-init:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:-Panaderia2026!Local}"
+    volumes:
+      - ./server/sql/PanaderiaDB.sql:/init/PanaderiaDB.sql:ro
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        /opt/mssql-tools18/bin/sqlcmd -S db -U sa -P "$$MSSQL_SA_PASSWORD" -C -Q "IF DB_ID(N'PanaderiaDB') IS NULL CREATE DATABASE [PanaderiaDB]"
+        /opt/mssql-tools18/bin/sqlcmd -S db -d PanaderiaDB -U sa -P "$$MSSQL_SA_PASSWORD" -C -b -Q "IF OBJECT_ID(N'dbo.Sucursal', N'U') IS NULL THROW 50001, 'INIT_REQUIRED', 1"
+        if [ "$$?" -ne 0 ]; then
+          /opt/mssql-tools18/bin/sqlcmd -S db -d PanaderiaDB -U sa -P "$$MSSQL_SA_PASSWORD" -C -i /init/PanaderiaDB.sql
+        fi
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    environment:
+      PORT: "4000"
+      JWT_SECRET: "${JWT_SECRET:-change-this-long-random-secret}"
+      DB_SERVER: "db"
+      DB_PORT: "1433"
+      DB_NAME: "PanaderiaDB"
+      DB_USER: "sa"
+      DB_PASS: "${MSSQL_SA_PASSWORD:-Panaderia2026!Local}"
+      CLIENT_ORIGIN: "${CLIENT_ORIGIN:-http://localhost:5173}"
+    ports:
+      - "${API_PORT:-4000}:4000"
+    volumes:
+      - panaderia-uploads:/app/uploads
+
+volumes:
+  panaderia-sql-data:
+  panaderia-uploads:
